@@ -1,0 +1,196 @@
+openapi: 3.1.0
+info:
+  title: TableBook
+  version: 0.2.0
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /v1/halls/{id}/floor-plan:
+    get:
+      operationId: getFloorPlan
+      summary: Read the geometry of a hall
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Hall geometry. Coordinates use the top-left origin and refer to table centers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FloorPlan'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: HALL_NOT_FOUND
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /v1/reservations:
+    post:
+      operationId: createReservation
+      summary: Confirm a two-hour reservation
+      security:
+        - bearer: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique per user and create operation. Reuse after a timeout with the same inputs.
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_-]{1,128}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReservation'
+      responses:
+        '201':
+          description: Original confirmed reservation, also returned on an idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: UNAUTHENTICATED
+          $ref: '#/components/responses/Error'
+        '409':
+          description: TABLE_UNAVAILABLE or IDEMPOTENCY_KEY_REUSED
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+  /v1/admin/reservations/{id}/schedule:
+    patch:
+      operationId: moveReservation
+      summary: Move a confirmed reservation as an administrator
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveReservation'
+      responses:
+        '200':
+          description: Updated reservation with a new version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reservation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: UNAUTHENTICATED
+          $ref: '#/components/responses/Error'
+        '403':
+          description: FORBIDDEN
+          $ref: '#/components/responses/Error'
+        '404':
+          description: RESERVATION_NOT_FOUND
+          $ref: '#/components/responses/Error'
+        '409':
+          description: TABLE_UNAVAILABLE or STALE_RESERVATION. The original reservation is preserved.
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/PositiveId'
+  responses:
+    Error:
+      description: Request failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadRequest:
+      description: INVALID_REQUEST, INVALID_TABLE, INVALID_GUEST_COUNT, INVALID_START_TIME, INVALID_IDEMPOTENCY_KEY or INVALID_VERSION
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string}
+    PositiveId:
+      type: integer
+      format: int64
+      minimum: 1
+    StartTime:
+      type: string
+      format: date-time
+      description: RFC 3339 with explicit offset and at most microsecond precision (additional trailing zeros are accepted).
+    GuestCount:
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 2147483647
+    CreateReservation:
+      type: object
+      additionalProperties: false
+      required: [tableId, guestCount, startsAt]
+      properties:
+        tableId: {$ref: '#/components/schemas/PositiveId'}
+        guestCount: {$ref: '#/components/schemas/GuestCount'}
+        startsAt: {$ref: '#/components/schemas/StartTime'}
+    MoveReservation:
+      type: object
+      additionalProperties: false
+      required: [tableId, startsAt, expectedVersion]
+      properties:
+        tableId: {$ref: '#/components/schemas/PositiveId'}
+        startsAt: {$ref: '#/components/schemas/StartTime'}
+        expectedVersion: {$ref: '#/components/schemas/PositiveId'}
+    Reservation:
+      type: object
+      required: [id, tableId, guestCount, startsAt, endsAt, status, version]
+      properties:
+        id: {$ref: '#/components/schemas/PositiveId'}
+        tableId: {$ref: '#/components/schemas/PositiveId'}
+        guestCount: {$ref: '#/components/schemas/GuestCount'}
+        startsAt: {type: string, format: date-time}
+        endsAt: {type: string, format: date-time}
+        status: {type: string, const: confirmed}
+        version: {$ref: '#/components/schemas/PositiveId'}
+    FloorPlan:
+      type: object
+      required: [id, name, timeZone, width, height, tables]
+      properties:
+        id: {$ref: '#/components/schemas/PositiveId'}
+        name: {type: string}
+        timeZone: {type: string}
+        width: {type: integer, minimum: 1}
+        height: {type: integer, minimum: 1}
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/FloorTable'
+    FloorTable:
+      type: object
+      required: [id, label, capacity, shape, x, y, size]
+      properties:
+        id: {$ref: '#/components/schemas/PositiveId'}
+        label: {type: string}
+        capacity: {$ref: '#/components/schemas/GuestCount'}
+        shape: {type: string, enum: [round, square]}
+        x: {type: integer, minimum: 0}
+        y: {type: integer, minimum: 0}
+        size: {type: integer, minimum: 1, description: Diameter of a round table or side of a square table.}
