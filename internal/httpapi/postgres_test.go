@@ -177,7 +177,7 @@ func testDatabase(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"001_booking.sql", "002_accounts.sql", "demo_seed.sql"} {
+	for _, name := range []string{"001_booking.sql", "002_accounts.sql", "003_guest_reservations.sql", "demo_seed.sql"} {
 		script, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		if err != nil {
 			t.Fatal(err)
@@ -233,6 +233,14 @@ func TestPostgresAccountsAPI(t *testing.T) {
 	path := fmt.Sprintf("/v1/reservations/%d", reservation.ID)
 	require(t, send("GET", path, tokens.AccessToken, ""), 200, "confirmed")
 	require(t, send("GET", path, other.AccessToken, ""), 404, "RESERVATION_NOT_FOUND")
+	require(t, send("GET", "/v1/halls", "", ""), 200, `"timeZone":"Europe/Moscow"`)
+	availability := "/v1/halls/1/availability?startsAt=2026-11-14T19:30:00Z&guestCount=2"
+	require(t, send("GET", availability, "", ""), 200, `"tableId":1,"available":false`)
+	require(t, send("GET", "/v1/halls/1/availability?startsAt=2026-11-14T21:00:00Z&guestCount=2", "", ""), 200, `"tableId":1,"available":true`)
+	require(t, send("GET", "/v1/halls/1/availability?startsAt=2026-11-14T21:00:00Z&guestCount=5", "", ""), 200, `"tableId":2,"available":false`)
+	require(t, send("GET", "/v1/reservations", tokens.AccessToken, ""), 200, `"tableLabel":"01"`)
+	require(t, send("GET", "/v1/reservations", other.AccessToken, ""), 200, "[]")
+	require(t, send("POST", path+"/cancel", other.AccessToken, ""), 404, "RESERVATION_NOT_FOUND")
 	adminPath := fmt.Sprintf("/v1/admin/reservations/%d/schedule", reservation.ID)
 	moveBody := `{"tableId":2,"expectedVersion":1,"startsAt":"2026-11-14T19:00:00Z"}`
 	require(t, send("PATCH", adminPath, tokens.AccessToken, moveBody), 403, "FORBIDDEN")
@@ -256,6 +264,11 @@ func TestPostgresAccountsAPI(t *testing.T) {
 	require(t, rejected, 401, "UNAUTHENTICATED")
 	rotated := parseTokens(success)
 	require(t, send("GET", path, rotated.AccessToken, ""), 200, "confirmed")
+	require(t, send("GET", "/v1/halls/1/availability?startsAt=2026-11-14T19:00:00Z&guestCount=2", "", ""), 200, `"tableId":2,"available":false`)
+	require(t, send("POST", path+"/cancel", rotated.AccessToken, ""), 204, "")
+	require(t, send("POST", path+"/cancel", rotated.AccessToken, ""), 204, "")
+	require(t, send("GET", path, rotated.AccessToken, ""), 200, "cancelled")
+	require(t, send("GET", "/v1/halls/1/availability?startsAt=2026-11-14T19:00:00Z&guestCount=2", "", ""), 200, `"tableId":2,"available":true`)
 	require(t, send("POST", "/v1/auth/logout", "", fmt.Sprintf(`{"refreshToken":%q}`, rotated.RefreshToken)), 204, "")
 	require(t, send("GET", path, rotated.AccessToken, ""), 401, "UNAUTHENTICATED")
 }

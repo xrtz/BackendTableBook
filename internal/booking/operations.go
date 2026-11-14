@@ -14,6 +14,7 @@ var (
 	ErrStaleReservation = errors.New("reservation version or status changed")
 	ErrInvalidVersion   = errors.New("version must be positive")
 	ErrInvalidKey       = errors.New("invalid idempotency key")
+	ErrCannotCancel     = errors.New("reservation cannot be cancelled")
 )
 
 func ValidKey(key string) bool {
@@ -65,7 +66,34 @@ type FloorTable struct {
 	Size     int
 }
 
+type Hall struct {
+	ID       int64
+	Name     string
+	TimeZone string
+}
+
+type AvailabilityQuery struct {
+	StartsAt   time.Time
+	GuestCount int
+}
+
+type TableAvailability struct {
+	TableID   int64
+	Available bool
+}
+
+type OwnedReservation struct {
+	Snapshot
+	TableLabel string
+	HallName   string
+	TimeZone   string
+}
+
 type Store interface {
+	Halls(ctx context.Context) ([]Hall, error)
+	Availability(ctx context.Context, hallID int64, query AvailabilityQuery) ([]TableAvailability, error)
+	ListForOwner(ctx context.Context, userID int64) ([]OwnedReservation, error)
+	CancelForOwner(ctx context.Context, userID, id int64) error
 	GetForOwner(ctx context.Context, userID, id int64) (Snapshot, error)
 	Create(ctx context.Context, userID int64, key string, request Request) (Snapshot, error)
 	Move(ctx context.Context, request MoveRequest) (Snapshot, error)

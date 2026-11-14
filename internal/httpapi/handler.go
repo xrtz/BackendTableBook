@@ -28,9 +28,13 @@ type handler struct {
 func New(store booking.Store, authenticate Authenticate) http.Handler {
 	api := handler{store: store, authenticate: authenticate}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/halls", api.halls)
 	mux.HandleFunc("GET /v1/halls/{id}/floor-plan", api.floorPlan)
+	mux.HandleFunc("GET /v1/halls/{id}/availability", api.availability)
 	mux.HandleFunc("POST /v1/reservations", api.create)
+	mux.HandleFunc("GET /v1/reservations", api.listReservations)
 	mux.HandleFunc("GET /v1/reservations/{id}", api.getReservation)
+	mux.HandleFunc("POST /v1/reservations/{id}/cancel", api.cancelReservation)
 	mux.HandleFunc("PATCH /v1/admin/reservations/{id}/schedule", api.move)
 	return mux
 }
@@ -176,6 +180,8 @@ func readJSON(w http.ResponseWriter, r *http.Request, input any) bool {
 
 func writeError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, booking.ErrCannotCancel):
+		writeCode(w, http.StatusConflict, "RESERVATION_CANNOT_CANCEL")
 	case errors.Is(err, booking.ErrTableUnavailable):
 		writeCode(w, http.StatusConflict, "TABLE_UNAVAILABLE")
 	case errors.Is(err, booking.ErrKeyReused):

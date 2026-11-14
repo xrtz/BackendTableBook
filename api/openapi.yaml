@@ -1,10 +1,66 @@
 openapi: 3.1.0
 info:
   title: TableBook
-  version: 0.3.0
+  version: 0.4.0
 servers:
   - url: http://127.0.0.1:8080
 paths:
+  /v1/halls:
+    get:
+      operationId: listHalls
+      responses:
+        '200':
+          description: Halls and their local time zones.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Hall'}
+        '500': {$ref: '#/components/responses/Error'}
+  /v1/halls/{id}/availability:
+    get:
+      operationId: getAvailability
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: startsAt
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/StartTime'}
+        - name: guestCount
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/GuestCount'}
+      responses:
+        '200':
+          description: Availability for the selected party and two-hour interval. The create endpoint confirms actual availability.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [tableId, available]
+                  properties:
+                    tableId: {$ref: '#/components/schemas/PositiveId'}
+                    available: {type: boolean}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+  /v1/reservations/{id}/cancel:
+    post:
+      operationId: cancelOwnReservation
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '204':
+          description: Future reservation cancelled or already cancelled.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
   /v1/auth/register:
     post:
       operationId: register
@@ -79,6 +135,20 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
   /v1/reservations:
+    get:
+      operationId: listOwnReservations
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Caller reservations, ordered by descending start time.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/OwnedReservation'}
+        '401': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
     post:
       operationId: createReservation
       summary: Confirm a two-hour reservation
@@ -210,6 +280,22 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    Hall:
+      type: object
+      required: [id, name, timeZone]
+      properties:
+        id: {$ref: '#/components/schemas/PositiveId'}
+        name: {type: string}
+        timeZone: {type: string}
+    OwnedReservation:
+      allOf:
+        - $ref: '#/components/schemas/Reservation'
+        - type: object
+          required: [tableLabel, hallName, timeZone]
+          properties:
+            tableLabel: {type: string}
+            hallName: {type: string}
+            timeZone: {type: string}
     Error:
       type: object
       required: [code]
