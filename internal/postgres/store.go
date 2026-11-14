@@ -26,6 +26,15 @@ func New(pool *pgxpool.Pool, now func() time.Time) *Store {
 
 const snapshotFields = "id, table_id, guest_count, starts_at, ends_at, status, version"
 
+func (s *Store) GetForOwner(ctx context.Context, userID, id int64) (booking.Snapshot, error) {
+	result, err := scanSnapshot(s.pool.QueryRow(ctx,
+		"SELECT "+snapshotFields+" FROM reservations WHERE id = $1 AND user_id = $2", id, userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = booking.ErrNotFound
+	}
+	return result, err
+}
+
 func (s *Store) Create(ctx context.Context, userID int64, key string, request booking.Request) (booking.Snapshot, error) {
 	return retryTransaction(ctx, func() (booking.Snapshot, error) {
 		return s.create(ctx, userID, key, request)

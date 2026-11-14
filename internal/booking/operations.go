@@ -66,6 +66,7 @@ type FloorTable struct {
 }
 
 type Store interface {
+	GetForOwner(ctx context.Context, userID, id int64) (Snapshot, error)
 	Create(ctx context.Context, userID int64, key string, request Request) (Snapshot, error)
 	Move(ctx context.Context, request MoveRequest) (Snapshot, error)
 	FloorPlan(ctx context.Context, hallID int64) (FloorPlan, error)

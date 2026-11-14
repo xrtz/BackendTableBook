@@ -30,8 +30,28 @@ func New(store booking.Store, authenticate Authenticate) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/halls/{id}/floor-plan", api.floorPlan)
 	mux.HandleFunc("POST /v1/reservations", api.create)
+	mux.HandleFunc("GET /v1/reservations/{id}", api.getReservation)
 	mux.HandleFunc("PATCH /v1/admin/reservations/{id}/schedule", api.move)
 	return mux
+}
+
+func (h handler) getReservation(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(r)
+	if !ok || principal.UserID <= 0 {
+		writeCode(w, http.StatusUnauthorized, "UNAUTHENTICATED")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeCode(w, http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+	result, err := h.store.GetForOwner(r.Context(), principal.UserID, id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, reservationResponse(result))
 }
 
 type reservationResponse struct {

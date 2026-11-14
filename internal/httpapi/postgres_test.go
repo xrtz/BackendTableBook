@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"tablebook/internal/accounts"
 	"tablebook/internal/httpapi"
 	"tablebook/internal/postgres"
 )
@@ -176,7 +177,7 @@ func testDatabase(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"001_booking.sql", "demo_seed.sql"} {
+	for _, name := range []string{"001_booking.sql", "002_accounts.sql", "demo_seed.sql"} {
 		script, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		if err != nil {
 			t.Fatal(err)
@@ -186,6 +187,77 @@ func testDatabase(t *testing.T) *pgxpool.Pool {
 		}
 	}
 	return pool
+}
+
+func TestPostgresAccountsAPI(t *testing.T) {
+	pool := testDatabase(t)
+	now := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	handler := httpapi.WithAccounts(postgres.New(pool, clock), accounts.New(pool, clock))
+	send := func(method, path, access, body string) reply {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		request := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+access)
+		request.Header.Set("Idempotency-Key", "first-reservation")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return reply{recorder.Code, recorder.Body.String()}
+	}
+	parseTokens := func(response reply) accounts.Tokens {
+		t.Helper()
+		var tokens accounts.Tokens
+		if err := json.Unmarshal([]byte(response.body), &tokens); err != nil ||
+			tokens.AccessToken == "" || tokens.RefreshToken == "" {
+			t.Fatalf("invalid session response, status %d, parse error %v", response.status, err)
+		}
+		return tokens
+	}
+	const owner = `{"email":"owner@example.test","password":"example long passphrase"}`
+	const guest = `{"email":"guest@example.test","password":"example long passphrase"}`
+	registered := send("POST", "/v1/auth/register", "", owner)
+	require(t, registered, 201, "accessToken")
+	require(t, send("POST", "/v1/auth/register", "", owner), 409, "EMAIL_TAKEN")
+	require(t, send("POST", "/v1/auth/login", "", `{"email":"owner@example.test","password":"wrong"}`), 401, "INVALID_CREDENTIALS")
+	loggedIn := send("POST", "/v1/auth/login", "", owner)
+	require(t, loggedIn, 200, "accessToken")
+	tokens := parseTokens(loggedIn)
+	other := parseTokens(send("POST", "/v1/auth/register", "", guest))
+	created := send("POST", "/v1/reservations", tokens.AccessToken,
+		`{"tableId":1,"guestCount":2,"startsAt":"2026-11-14T19:00:00Z"}`)
+	require(t, created, 201, "confirmed")
+	var reservation reservation
+	if err := json.Unmarshal([]byte(created.body), &reservation); err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf("/v1/reservations/%d", reservation.ID)
+	require(t, send("GET", path, tokens.AccessToken, ""), 200, "confirmed")
+	require(t, send("GET", path, other.AccessToken, ""), 404, "RESERVATION_NOT_FOUND")
+	adminPath := fmt.Sprintf("/v1/admin/reservations/%d/schedule", reservation.ID)
+	moveBody := `{"tableId":2,"expectedVersion":1,"startsAt":"2026-11-14T19:00:00Z"}`
+	require(t, send("PATCH", adminPath, tokens.AccessToken, moveBody), 403, "FORBIDDEN")
+	if _, err := pool.Exec(t.Context(), "UPDATE accounts SET role = 'admin' WHERE email = 'owner@example.test'"); err != nil {
+		t.Fatal(err)
+	}
+	require(t, send("PATCH", adminPath, tokens.AccessToken, moveBody), 200, "confirmed")
+
+	now = now.Add(16 * time.Minute)
+	require(t, send("GET", path, tokens.AccessToken, ""), 401, "UNAUTHENTICATED")
+	refreshBody := fmt.Sprintf(`{"refreshToken":%q}`, tokens.RefreshToken)
+	results := make(chan reply, 2)
+	for range 2 {
+		go func() { results <- send("POST", "/v1/auth/refresh", "", refreshBody) }()
+	}
+	success, rejected := <-results, <-results
+	if rejected.status == 200 {
+		success, rejected = rejected, success
+	}
+	require(t, success, 200, "accessToken")
+	require(t, rejected, 401, "UNAUTHENTICATED")
+	rotated := parseTokens(success)
+	require(t, send("GET", path, rotated.AccessToken, ""), 200, "confirmed")
+	require(t, send("POST", "/v1/auth/logout", "", fmt.Sprintf(`{"refreshToken":%q}`, rotated.RefreshToken)), 204, "")
+	require(t, send("GET", path, rotated.AccessToken, ""), 401, "UNAUTHENTICATED")
 }
 
 func require(t *testing.T, result reply, status int, fragment string) {

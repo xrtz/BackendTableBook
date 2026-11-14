@@ -1,10 +1,63 @@
 openapi: 3.1.0
 info:
   title: TableBook
-  version: 0.2.0
+  version: 0.3.0
 servers:
   - url: http://127.0.0.1:8080
 paths:
+  /v1/auth/register:
+    post:
+      operationId: register
+      requestBody: {$ref: '#/components/requestBodies/Credentials'}
+      responses:
+        '201': {$ref: '#/components/responses/Session'}
+        '400': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody: {$ref: '#/components/requestBodies/Credentials'}
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+  /v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      requestBody: {$ref: '#/components/requestBodies/RefreshToken'}
+      responses:
+        '200': {$ref: '#/components/responses/Session'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      requestBody: {$ref: '#/components/requestBodies/RefreshToken'}
+      responses:
+        '204':
+          description: Session revoked or already absent.
+        '400': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+  /v1/reservations/{id}:
+    get:
+      operationId: getOwnReservation
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Reservation owned by the authenticated account.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Reservation'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
   /v1/halls/{id}/floor-plan:
     get:
       operationId: getFloorPlan
@@ -100,6 +153,28 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 components:
+  requestBodies:
+    Credentials:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [email, password]
+            properties:
+              email: {type: string, format: email}
+              password: {type: string, format: password, description: Registration requires 15 characters minimum and 512 UTF-8 bytes maximum.}
+    RefreshToken:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [refreshToken]
+            properties:
+              refreshToken: {type: string}
   securitySchemes:
     bearer:
       type: http
@@ -112,6 +187,16 @@ components:
       schema:
         $ref: '#/components/schemas/PositiveId'
   responses:
+    Session:
+      description: Access token valid for up to 15 minutes and a rotating refresh token with a 30-day absolute session lifetime.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [accessToken, refreshToken]
+            properties:
+              accessToken: {type: string}
+              refreshToken: {type: string}
     Error:
       description: Request failed.
       content:
@@ -168,7 +253,7 @@ components:
         guestCount: {$ref: '#/components/schemas/GuestCount'}
         startsAt: {type: string, format: date-time}
         endsAt: {type: string, format: date-time}
-        status: {type: string, const: confirmed}
+        status: {type: string, enum: [confirmed, seated, completed, cancelled]}
         version: {$ref: '#/components/schemas/PositiveId'}
     FloorPlan:
       type: object
