@@ -48,12 +48,13 @@ type MoveRequest struct {
 }
 
 type FloorPlan struct {
-	ID       int64
-	Name     string
-	TimeZone string
-	Width    int
-	Height   int
-	Tables   []FloorTable
+	ServerTime time.Time
+	ID         int64
+	Name       string
+	TimeZone   string
+	Width      int
+	Height     int
+	Tables     []FloorTable
 }
 
 type FloorTable struct {
@@ -90,6 +91,9 @@ type OwnedReservation struct {
 }
 
 type Store interface {
+	AdminReservations(ctx context.Context, filter AdminFilter) ([]AdminReservation, error)
+	CreateForGuest(ctx context.Context, email, key string, request Request) (Snapshot, error)
+	ChangeStatus(ctx context.Context, id, version int64, target string) error
 	Halls(ctx context.Context) ([]Hall, error)
 	Availability(ctx context.Context, hallID int64, query AvailabilityQuery) ([]TableAvailability, error)
 	ListForOwner(ctx context.Context, userID int64) ([]OwnedReservation, error)

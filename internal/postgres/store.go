@@ -209,6 +209,7 @@ func (s *Store) FloorPlan(ctx context.Context, hallID int64) (booking.FloorPlan,
 		}
 		plan.Tables = append(plan.Tables, table)
 	}
+	plan.ServerTime = s.now().UTC()
 	return plan, rows.Err()
 }
 

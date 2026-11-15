@@ -65,6 +65,7 @@ func TestPostgresBookingAPI(t *testing.T) {
 	const start = "2026-11-14T19:00:00Z"
 	const adjacent = "2026-11-14T21:00:00Z"
 	require(t, send(http.MethodGet, "/v1/halls/1/floor-plan", "", "", ""), 200, `"shape":"round"`)
+	require(t, send(http.MethodGet, "/v1/halls/1/floor-plan", "", "", ""), 200, `"serverTime":"2026-11-14T15:00:00Z"`)
 	require(t, create("", "unauth", 1, start), 401, "UNAUTHENTICATED")
 
 	type attempt struct {
@@ -242,12 +243,31 @@ func TestPostgresAccountsAPI(t *testing.T) {
 	require(t, send("GET", "/v1/reservations", other.AccessToken, ""), 200, "[]")
 	require(t, send("POST", path+"/cancel", other.AccessToken, ""), 404, "RESERVATION_NOT_FOUND")
 	adminPath := fmt.Sprintf("/v1/admin/reservations/%d/schedule", reservation.ID)
+	journal := "/v1/admin/reservations?hallId=1&day=2026-11-14"
+	require(t, send("GET", "/v1/auth/me", tokens.AccessToken, ""), 200, `"role":"guest"`)
+	require(t, send("GET", journal, tokens.AccessToken, ""), 403, "FORBIDDEN")
 	moveBody := `{"tableId":2,"expectedVersion":1,"startsAt":"2026-11-14T19:00:00Z"}`
 	require(t, send("PATCH", adminPath, tokens.AccessToken, moveBody), 403, "FORBIDDEN")
 	if _, err := pool.Exec(t.Context(), "UPDATE accounts SET role = 'admin' WHERE email = 'owner@example.test'"); err != nil {
 		t.Fatal(err)
 	}
-	require(t, send("PATCH", adminPath, tokens.AccessToken, moveBody), 200, "confirmed")
+	require(t, send("GET", "/v1/auth/me", tokens.AccessToken, ""), 200, `"role":"admin"`)
+	require(t, send("GET", journal, tokens.AccessToken, ""), 200, "owner@example.test")
+	require(t, send("POST", adminPath, tokens.AccessToken, moveBody), 200, "confirmed")
+	statusPath := fmt.Sprintf("/v1/admin/reservations/%d/status", reservation.ID)
+	require(t, send("POST", statusPath, tokens.AccessToken, `{"status":"seated","expectedVersion":1}`), 409, "STALE_RESERVATION")
+	require(t, send("POST", "/v1/admin/reservations", other.AccessToken, "{}"), 403, "FORBIDDEN")
+	manual := `{"email":"guest@example.test","tableId":3,"guestCount":2,"startsAt":"2026-11-14T19:00:00Z"}`
+	require(t, send("POST", "/v1/admin/reservations", tokens.AccessToken, manual), 201, "confirmed")
+	require(t, send("GET", "/v1/reservations", other.AccessToken, ""), 200, `"tableId":3`)
+	var manualID int64
+	if err := pool.QueryRow(t.Context(), "SELECT id FROM reservations WHERE table_id=3").Scan(&manualID); err != nil {
+		t.Fatal(err)
+	}
+	manualStatusPath := fmt.Sprintf("/v1/admin/reservations/%d/status", manualID)
+	require(t, send("POST", manualStatusPath, tokens.AccessToken, `{"status":"seated","expectedVersion":1}`), 204, "")
+	require(t, send("POST", manualStatusPath, tokens.AccessToken, `{"status":"completed","expectedVersion":2}`), 204, "")
+	require(t, send("GET", journal+"&status=completed", tokens.AccessToken, ""), 200, `"status":"completed"`)
 
 	now = now.Add(16 * time.Minute)
 	require(t, send("GET", path, tokens.AccessToken, ""), 401, "UNAUTHENTICATED")

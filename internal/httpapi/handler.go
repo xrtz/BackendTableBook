@@ -35,7 +35,12 @@ func New(store booking.Store, authenticate Authenticate) http.Handler {
 	mux.HandleFunc("GET /v1/reservations", api.listReservations)
 	mux.HandleFunc("GET /v1/reservations/{id}", api.getReservation)
 	mux.HandleFunc("POST /v1/reservations/{id}/cancel", api.cancelReservation)
+	mux.HandleFunc("GET /v1/auth/me", api.me)
+	mux.HandleFunc("GET /v1/admin/reservations", api.adminJournal)
+	mux.HandleFunc("POST /v1/admin/reservations", api.adminCreate)
+	mux.HandleFunc("POST /v1/admin/reservations/{id}/status", api.adminStatus)
 	mux.HandleFunc("PATCH /v1/admin/reservations/{id}/schedule", api.move)
+	mux.HandleFunc("POST /v1/admin/reservations/{id}/schedule", api.move)
 	return mux
 }
 
@@ -102,13 +107,7 @@ func (h handler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handler) move(w http.ResponseWriter, r *http.Request) {
-	principal, ok := h.authenticate(r)
-	if !ok || principal.UserID <= 0 {
-		writeCode(w, http.StatusUnauthorized, "UNAUTHENTICATED")
-		return
-	}
-	if !principal.Admin {
-		writeCode(w, http.StatusForbidden, "FORBIDDEN")
+	if !h.requireAdmin(w, r) {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -159,13 +158,14 @@ func (h handler) floorPlan(w http.ResponseWriter, r *http.Request) {
 		tables = append(tables, floorTableResponse(table))
 	}
 	writeJSON(w, http.StatusOK, struct {
-		ID       int64                `json:"id"`
-		Name     string               `json:"name"`
-		TimeZone string               `json:"timeZone"`
-		Width    int                  `json:"width"`
-		Height   int                  `json:"height"`
-		Tables   []floorTableResponse `json:"tables"`
-	}{plan.ID, plan.Name, plan.TimeZone, plan.Width, plan.Height, tables})
+		ID         int64                `json:"id"`
+		Name       string               `json:"name"`
+		TimeZone   string               `json:"timeZone"`
+		Width      int                  `json:"width"`
+		Height     int                  `json:"height"`
+		Tables     []floorTableResponse `json:"tables"`
+		ServerTime time.Time            `json:"serverTime"`
+	}{plan.ID, plan.Name, plan.TimeZone, plan.Width, plan.Height, tables, plan.ServerTime})
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, input any) bool {
@@ -180,6 +180,8 @@ func readJSON(w http.ResponseWriter, r *http.Request, input any) bool {
 
 func writeError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, booking.ErrGuestNotFound):
+		writeCode(w, http.StatusNotFound, "GUEST_NOT_FOUND")
 	case errors.Is(err, booking.ErrCannotCancel):
 		writeCode(w, http.StatusConflict, "RESERVATION_CANNOT_CANCEL")
 	case errors.Is(err, booking.ErrTableUnavailable):

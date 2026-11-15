@@ -30,9 +30,11 @@ func main() {
 		log.Fatal("database connection failed")
 	}
 	cancel()
+	store := postgres.New(pool, time.Now)
+	sessions := accounts.New(pool, time.Now)
 	server := http.Server{
 		Addr:              "127.0.0.1:8080",
-		Handler:           httpapi.WithAccounts(postgres.New(pool, time.Now), accounts.New(pool, time.Now)),
+		Handler:           httpapi.WithAccounts(store, sessions),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

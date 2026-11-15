@@ -5,6 +5,104 @@ info:
 servers:
   - url: http://127.0.0.1:8080
 paths:
+  /v1/auth/me:
+    get:
+      operationId: getAccountRole
+      security:
+        - bearer: []
+      responses:
+        '200':
+          description: Role of the current account.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [role]
+                properties:
+                  role: {type: string, enum: [guest, admin]}
+        '401': {$ref: '#/components/responses/Error'}
+  /v1/admin/reservations:
+    get:
+      operationId: listAdminReservations
+      security:
+        - bearer: []
+      parameters:
+        - {name: hallId, in: query, required: true, schema: {$ref: '#/components/schemas/PositiveId'}}
+        - {name: day, in: query, required: true, schema: {type: string, format: date}}
+        - {name: status, in: query, schema: {type: string, enum: [confirmed, seated, completed, cancelled]}}
+      responses:
+        '200':
+          description: Reservations intersecting the selected local day.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Reservation'
+                    - type: object
+                      required: [tableLabel, guestEmail]
+                      properties:
+                        tableLabel: {type: string}
+                        guestEmail: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+    post:
+      operationId: createReservationForGuest
+      security:
+        - bearer: []
+      parameters:
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, pattern: '^[A-Za-z0-9_-]{1,128}$'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, tableId, guestCount, startsAt]
+              properties:
+                email: {type: string, format: email}
+                tableId: {$ref: '#/components/schemas/PositiveId'}
+                guestCount: {$ref: '#/components/schemas/GuestCount'}
+                startsAt: {$ref: '#/components/schemas/StartTime'}
+      responses:
+        '201':
+          description: Reservation created for the registered guest.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Reservation'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /v1/admin/reservations/{id}/status:
+    post:
+      operationId: changeReservationStatus
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status, expectedVersion]
+              properties:
+                status: {type: string, enum: [seated, completed, cancelled]}
+                expectedVersion: {$ref: '#/components/schemas/PositiveId'}
+      responses:
+        '204':
+          description: Status updated.
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
   /v1/halls:
     get:
       operationId: listHalls
@@ -186,6 +284,29 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
   /v1/admin/reservations/{id}/schedule:
+    post:
+      operationId: rescheduleReservation
+      summary: Move a confirmed reservation as an administrator
+      security:
+        - bearer: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MoveReservation'}
+      responses:
+        '200':
+          description: Updated reservation with a new version.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Reservation'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
     patch:
       operationId: moveReservation
       summary: Move a confirmed reservation as an administrator
@@ -343,13 +464,14 @@ components:
         version: {$ref: '#/components/schemas/PositiveId'}
     FloorPlan:
       type: object
-      required: [id, name, timeZone, width, height, tables]
+      required: [id, name, timeZone, width, height, tables, serverTime]
       properties:
         id: {$ref: '#/components/schemas/PositiveId'}
         name: {type: string}
         timeZone: {type: string}
         width: {type: integer, minimum: 1}
         height: {type: integer, minimum: 1}
+        serverTime: {type: string, format: date-time}
         tables:
           type: array
           items:
