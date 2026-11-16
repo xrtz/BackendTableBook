@@ -5,6 +5,29 @@ info:
 servers:
   - url: http://127.0.0.1:8080
 paths:
+  /v1/events:
+    get:
+      operationId: subscribeToBookingEvents
+      summary: Open an authenticated WebSocket for booking invalidations.
+      description: >
+        The server sends {"type":"bookings_changed"} after connecting and when a reservation
+        owned by the current account or belonging to the optional hall changes.
+        On each signal fetch the corresponding HTTP resource again.
+      security:
+        - bearer: []
+      parameters:
+        - name: hallId
+          in: query
+          schema: {$ref: '#/components/schemas/PositiveId'}
+      responses:
+        '101':
+          description: WebSocket connection established.
+        '400':
+          description: Invalid hall ID or WebSocket upgrade.
+        '401':
+          description: Missing, expired or invalid access token.
+        '503':
+          description: Session store temporarily unavailable.
   /v1/auth/me:
     get:
       operationId: getAccountRole

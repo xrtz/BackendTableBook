@@ -12,6 +12,7 @@ import (
 	"tablebook/internal/accounts"
 	"tablebook/internal/httpapi"
 	"tablebook/internal/postgres"
+	"tablebook/internal/realtime"
 )
 
 func main() {
@@ -32,9 +33,13 @@ func main() {
 	cancel()
 	store := postgres.New(pool, time.Now)
 	sessions := accounts.New(pool, time.Now)
+	events := realtime.Listen(context.Background(), pool)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/events", events.Handler(sessions.Authenticate))
+	mux.Handle("/", httpapi.WithAccounts(store, sessions))
 	server := http.Server{
 		Addr:              "127.0.0.1:8080",
-		Handler:           httpapi.WithAccounts(store, sessions),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

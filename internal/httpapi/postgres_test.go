@@ -12,17 +12,108 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"tablebook/internal/accounts"
+	"tablebook/internal/booking"
 	"tablebook/internal/httpapi"
 	"tablebook/internal/postgres"
+	"tablebook/internal/realtime"
 )
 
 type reply struct {
 	status int
 	body   string
+}
+
+func TestPostgresBookingEvents(t *testing.T) {
+	pool := testDatabase(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	now := time.Date(2026, 11, 14, 15, 0, 0, 0, time.UTC)
+	events := realtime.Listen(ctx, pool)
+	server := httptest.NewServer(events.Handler(func(_ context.Context, token string) (accounts.Principal, error) {
+		if token == "owner" {
+			return accounts.Principal{UserID: 1}, nil
+		}
+		if token == "observer" {
+			return accounts.Principal{UserID: 2}, nil
+		}
+		return accounts.Principal{}, accounts.ErrUnauthenticated
+	}))
+	defer server.Close()
+	open := func(token, query string) *websocket.Conn {
+		t.Helper()
+		conn, _, err := websocket.Dial(ctx, server.URL+query, &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": {"Bearer " + token}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.CloseNow() })
+		return conn
+	}
+	if conn, response, err := websocket.Dial(ctx, server.URL, nil); err == nil {
+		_ = conn.CloseNow()
+		t.Fatal("unauthenticated WebSocket was accepted")
+	} else if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 from WebSocket handshake, got %v", err)
+	}
+	read := func(conn *websocket.Conn) {
+		t.Helper()
+		readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, data, err := conn.Read(readCtx)
+		if err != nil || string(data) != `{"type":"bookings_changed"}` {
+			t.Fatalf("read invalidation: %q, error: %v", data, err)
+		}
+	}
+	// Wait for LISTEN before connecting so the initial invalidation is deterministic.
+	for {
+		var listening bool
+		err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE application_name=$1 AND query='LISTEN tablebook_booking' AND state='idle')`,
+			pool.Config().ConnConfig.RuntimeParams["application_name"]).Scan(&listening)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if listening {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	owner := open("owner", "")
+	hall := open("observer", "?hallId=1")
+	otherHall := open("observer", "?hallId=2")
+	read(owner)
+	read(hall)
+	read(otherHall)
+	store := postgres.New(pool, func() time.Time { return now })
+	created, err := store.Create(ctx, 1, "event-test", booking.Request{
+		TableID: 1, GuestCount: 2, StartsAt: now.Add(3 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read(owner)
+	read(hall)
+	deadline, stop := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer stop()
+	if _, _, err := otherHall.Read(deadline); err == nil || deadline.Err() == nil {
+		t.Fatalf("unrelated hall received a signal or disconnected early: %v", err)
+	}
+	newHall := open("observer", "?hallId=2")
+	read(newHall)
+	if _, err := store.Move(ctx, booking.MoveRequest{
+		ReservationID: created.ID, TableID: 5, StartsAt: created.StartsAt, ExpectedVersion: created.Version,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	read(owner)
+	read(hall)
+	read(newHall)
 }
 
 type reservation struct {
@@ -173,12 +264,13 @@ func testDatabase(t *testing.T) *pgxpool.Pool {
 	}
 	config.MaxConns = 4
 	config.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
+	config.ConnConfig.RuntimeParams["application_name"] = schema
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, name := range []string{"001_booking.sql", "002_accounts.sql", "003_guest_reservations.sql", "demo_seed.sql"} {
+	for _, name := range []string{"001_booking.sql", "002_accounts.sql", "003_guest_reservations.sql", "004_booking_events.sql", "demo_seed.sql"} {
 		script, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		if err != nil {
 			t.Fatal(err)
